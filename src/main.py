@@ -195,6 +195,22 @@ app.include_router(webhooks.router, prefix="/v3")
 # Prometheus metrics endpoint
 app.add_route("/metrics", metrics_endpoint, methods=["GET"])
 
+# Health check endpoint (GitOps: provides Docker healthcheck target)
+@app.get("/health", tags=["health"])
+async def health():
+    """Returns 200 OK if the API and database are reachable.
+    
+    Used by Docker HEALTHCHECK, load balancers, and external monitoring.
+    """
+    from src.db import engine
+    try:
+        async with engine.connect() as conn:
+            await conn.execute("SELECT 1")
+        return {"status": "healthy", "version": "3.0.3"}
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}
+
+
 
 # Global exception handlers
 @app.exception_handler(HonchoException)
