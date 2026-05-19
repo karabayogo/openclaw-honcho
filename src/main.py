@@ -205,7 +205,8 @@ async def health():
     from src.db import engine
     try:
         async with engine.connect() as conn:
-            await conn.execute("SELECT 1")
+            from sqlalchemy import text
+            await conn.execute(text("SELECT 1"))
         return {"status": "healthy", "version": "3.0.3"}
     except Exception as e:
         return {"status": "unhealthy", "error": str(e)}
