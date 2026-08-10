@@ -40,6 +40,13 @@ class _EmbeddingClient:
             self.max_embedding_tokens: int = min(settings.MAX_EMBEDDING_TOKENS, 2048)
             # Gemini batch size is not documented, using conservative estimate
             self.max_batch_size: int = 100
+        elif self.provider == "ollama":
+            # Ollama local embeddings via OpenAI-compatible API
+            base_url = settings.LLM.OLLAMA_BASE_URL
+            self.client = AsyncOpenAI(api_key="ollama", base_url=base_url)
+            self.model = settings.LLM.EMBEDDING_MODEL or "nomic-embed-text"
+            self.max_embedding_tokens = min(settings.MAX_EMBEDDING_TOKENS, 8192)
+            self.max_batch_size: int = 100
         elif self.provider == "openrouter":
             if api_key is None:
                 api_key = settings.LLM.OPENAI_COMPATIBLE_API_KEY
@@ -87,7 +94,7 @@ class _EmbeddingClient:
             if not response.embeddings or not response.embeddings[0].values:
                 raise ValueError("No embedding returned from Gemini API")
             return response.embeddings[0].values
-        else:  # openai
+        else:  # openai / openrouter / ollama
             response = await self.client.embeddings.create(
                 model=self.model, input=query
             )
@@ -262,7 +269,7 @@ class _EmbeddingClient:
                                 result[item.text_id][item.chunk_index] = (
                                     embedding.values
                                 )
-                else:  # openai / openrouter
+                else:  # openai / openrouter / ollama
                     response = await self.client.embeddings.create(
                         model=self.model, input=[item.text for item in batch]
                     )
@@ -382,6 +389,8 @@ class EmbeddingClient:
                         api_key = settings.LLM.GEMINI_API_KEY
                     elif provider == "openrouter":
                         api_key = settings.LLM.OPENAI_COMPATIBLE_API_KEY
+                    elif provider == "ollama":
+                        api_key = "ollama"  # Ollama doesn't need a real key
                     else:
                         api_key = settings.LLM.OPENAI_API_KEY
 

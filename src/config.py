@@ -203,6 +203,7 @@ class LLMSettings(HonchoSettings):
 
     # API Keys for LLM providers
     ANTHROPIC_API_KEY: str | None = None
+    ANTHROPIC_BASE_URL: str | None = None  # Override Anthropic API base URL (e.g. for MiniMax proxy)
     OPENAI_API_KEY: str | None = None
     OPENAI_COMPATIBLE_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
@@ -213,7 +214,9 @@ class LLMSettings(HonchoSettings):
     VLLM_API_KEY: str | None = None
     VLLM_BASE_URL: str | None = None
 
-    EMBEDDING_PROVIDER: Literal["openai", "gemini", "openrouter"] = "openai"
+    EMBEDDING_PROVIDER: Literal["openai", "gemini", "openrouter", "ollama"] = "openai"
+    EMBEDDING_MODEL: str | None = None  # Override embedding model (defaults per provider)
+    OLLAMA_BASE_URL: str = "http://172.18.0.1:11434/v1"  # Ollama OpenAI-compatible endpoint (Docker gateway)
 
     # General LLM settings
     DEFAULT_MAX_TOKENS: Annotated[int, Field(default=1000, gt=0, le=100_000)] = 2500
@@ -592,10 +595,10 @@ class VectorStoreSettings(HonchoSettings):
     DIMENSIONS: Annotated[
         int,
         Field(
-            default=1536,
+            default=768,
             gt=0,
         ),
-    ] = 1536
+    ] = 768
 
     # Turbopuffer-specific settings
     TURBOPUFFER_API_KEY: str | None = None

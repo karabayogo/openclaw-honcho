@@ -541,6 +541,79 @@ async def _cleanup_pgvector_batch(
         return True
 
 
+async def _reconcile_message_embeddings_pgvector_batch(
+    metrics: ReconciliationMetrics,
+) -> bool:
+    """
+    Re-embed and sync pending message_embeddings in pgvector-only mode.
+
+    In pgvector mode the consumer skips storing embeddings in postgres (embedding=None),
+    leaving records stuck in sync_state='pending'. This function re-embeds them and
+    marks them synced locally.
+
+    Returns True if work was done, False otherwise.
+    """
+    async with tracked_db("reconciliation_pgvector_embs") as db:
+        # Get pending records that need re-embedding
+        stmt = (
+            select(models.MessageEmbedding)
+            .where(models.MessageEmbedding.sync_state == "pending")
+            .where(models.MessageEmbedding.embedding.is_(None))
+            .order_by(models.MessageEmbedding.last_sync_at.desc())
+            .limit(RECONCILIATION_BATCH_SIZE)
+            .with_for_update(skip_locked=True)
+        )
+        result = await db.execute(stmt)
+        embeddings = list(result.scalars().all())
+
+        if not embeddings:
+            return False
+
+        # Re-embed missing vectors
+        try:
+            contents = [emb.content for emb in embeddings]
+            new_embeddings = await embedding_client.simple_batch_embed(contents)
+
+            if len(new_embeddings) != len(embeddings):
+                logger.warning(
+                    "Re-embedded %s/%s message embeddings; remaining will be retried",
+                    len(new_embeddings),
+                    len(embeddings),
+                )
+
+            synced_count = 0
+            failed_count = 0
+            for emb, new_emb in zip(embeddings, new_embeddings, strict=False):
+                emb.embedding = new_emb
+                emb.sync_state = "synced"
+                emb.last_sync_at = func.now()
+                emb.sync_attempts = 0
+                synced_count += 1
+
+            # Handle any that failed to embed
+            failed = embeddings[len(new_embeddings):]
+            if failed:
+                for emb in failed:
+                    emb.sync_attempts = (emb.sync_attempts or 0) + 1
+                failed_count = len(failed)
+
+            metrics.message_embeddings_synced += synced_count
+            metrics.message_embeddings_failed += failed_count
+            await db.commit()
+            return True
+
+        except Exception:
+            logger.exception(
+                "Failed to re-embed %s message embeddings in pgvector mode",
+                len(embeddings),
+            )
+            for emb in embeddings:
+                emb.sync_attempts = (emb.sync_attempts or 0) + 1
+            metrics.message_embeddings_failed += len(embeddings)
+            await db.commit()
+            return True  # Did work (bumps attempts); will eventually exhaust or succeed
+
+
 async def run_vector_reconciliation_cycle() -> ReconciliationMetrics:
     """
     Run a complete reconciliation cycle.
@@ -556,10 +629,13 @@ async def run_vector_reconciliation_cycle() -> ReconciliationMetrics:
     external_vector_store = get_external_vector_store()
     deadline = time.monotonic() + RECONCILIATION_TIME_BUDGET_SECONDS
 
-    # If no external vector store (pgvector mode), only clean up soft-deleted documents
+    # If no external vector store (pgvector mode), reconcile embeddings locally + clean up
     if external_vector_store is None:
         while time.monotonic() < deadline:
-            did_work = await _cleanup_pgvector_batch(metrics)
+            did_work = (
+                await _reconcile_message_embeddings_pgvector_batch(metrics)
+                or await _cleanup_pgvector_batch(metrics)
+            )
             if not did_work:
                 break
         logger.info("Vector reconciliation cycle completed (pgvector mode)")
